@@ -83,7 +83,9 @@ export const action = async ({ request, params }) => {
     const isTest = forcedTest || partnerDevelopment;
     console.log("[billing] isTest=%s forcedTest=%s partnerDevelopment=%s shop=%s", isTest, forcedTest, partnerDevelopment, session.shop);
 
-    const returnUrl = new URL(`/app/sections/${params.handle}`, request.url).toString();
+    // IMPORTANT: preserve query params (esp. `host`) for embedded app context.
+    const returnUrl = request.url;
+
     return billing.request({
       plan: section.billingPlan,
       isTest,
@@ -93,30 +95,21 @@ export const action = async ({ request, params }) => {
 
   if (intent === "purchase") {
     // Require one-time purchase. If missing, redirect to Shopify confirmation.
-    try {
-      await billing.require({
-        plans: [section.billingPlan],
-        onFailure: billingRequest,
-      });
-    } catch (err) {
-      console.error("[billing] Purchase error:", err.message, err.errorData ?? err);
-      return { ok: false, errors: [{ message: err.message }] };
-    }
+    // NOTE: Don't swallow Response errors here — Shopify uses thrown Responses to trigger reauth or redirects.
+    await billing.require({
+      plans: [section.billingPlan],
+      onFailure: billingRequest,
+    });
 
     return { ok: true };
   }
 
   if (intent === "install") {
     // Ensure purchased
-    try {
-      await billing.require({
-        plans: [section.billingPlan],
-        onFailure: billingRequest,
-      });
-    } catch (err) {
-      console.error("[billing] Install billing error:", err.message, err.errorData ?? err);
-      return { ok: false, errors: [{ message: err.message }] };
-    }
+    await billing.require({
+      plans: [section.billingPlan],
+      onFailure: billingRequest,
+    });
 
     const themeId = String(form.get("themeId") || "");
     if (!themeId) throw new Response("Missing theme", { status: 400 });
