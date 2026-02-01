@@ -1,3 +1,4 @@
+import { useState, useCallback } from "react";
 import { useFetcher, useLoaderData } from "@remix-run/react";
 import { Page, Card, BlockStack, Text, Button, InlineStack, Select, Banner } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
@@ -82,9 +83,11 @@ export const action = async ({ request, params }) => {
     const isTest = forcedTest || partnerDevelopment;
     console.log("[billing] isTest=%s forcedTest=%s partnerDevelopment=%s shop=%s", isTest, forcedTest, partnerDevelopment, session.shop);
 
+    const returnUrl = new URL(`/app/sections/${params.handle}`, request.url).toString();
     return billing.request({
       plan: section.billingPlan,
       isTest,
+      returnUrl,
     });
   };
 
@@ -180,8 +183,8 @@ export default function SectionDetail() {
       value: t.id,
     }));
 
-  const themeIdFromForm = String(installFetcher.formData?.get("themeId") || "");
-  const selectedThemeId = themeIdFromForm || themeOptions[0]?.value || "";
+  const [selectedThemeId, setSelectedThemeId] = useState(themeOptions[0]?.value || "");
+  const handleThemeChange = useCallback((value) => setSelectedThemeId(value), []);
   const selectedTheme = themes.find((t) => t.id === selectedThemeId) || null;
 
   const hasPurchased = Boolean(billingState?.hasActivePayment);
@@ -239,7 +242,7 @@ export default function SectionDetail() {
 
               <installFetcher.Form method="post">
                 <input type="hidden" name="intent" value="install" />
-                <Select label="Theme" name="themeId" options={themeOptions} value={selectedThemeId} />
+                <Select label="Theme" name="themeId" options={themeOptions} value={selectedThemeId} onChange={handleThemeChange} />
                 <Text as="p" variant="bodySm" tone="subdued">
                   Selected theme: {selectedTheme?.name || ""}
                 </Text>
