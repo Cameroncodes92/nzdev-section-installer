@@ -3,9 +3,17 @@ import { Page, Card, BlockStack, Text, Button, InlineStack, Select, Banner } fro
 import { authenticate } from "../shopify.server";
 import { getSectionByHandle, readSectionLiquid } from "../sections/catalog.server";
 
-function buildThemeEditorUrl(shopDomain, themeLegacyId) {
+function getLegacyIdFromGid(gid) {
+  // e.g. gid://shopify/OnlineStoreTheme/123456789
+  const m = String(gid || "").match(/(\d+)$/);
+  return m ? m[1] : "";
+}
+
+function buildThemeEditorUrl(shopDomain, themeGid) {
   const store = shopDomain.replace(/\.myshopify\.com$/i, "");
-  return `https://admin.shopify.com/store/${store}/themes/${themeLegacyId}/editor`;
+  const legacyId = getLegacyIdFromGid(themeGid);
+  if (!legacyId) return "";
+  return `https://admin.shopify.com/store/${store}/themes/${legacyId}/editor`;
 }
 
 export const loader = async ({ request, params }) => {
@@ -19,7 +27,7 @@ export const loader = async ({ request, params }) => {
     #graphql
     query Themes {
       themes(first: 50) {
-        nodes { id legacyResourceId name role }
+        nodes { id name role }
       }
     }
   `);
@@ -97,8 +105,7 @@ export const action = async ({ request, params }) => {
     });
 
     const themeId = String(form.get("themeId") || "");
-    const themeLegacyId = String(form.get("themeLegacyId") || "");
-    if (!themeId || !themeLegacyId) throw new Response("Missing theme", { status: 400 });
+    if (!themeId) throw new Response("Missing theme", { status: 400 });
 
     const liquid = readSectionLiquid(section.handle);
 
@@ -134,7 +141,7 @@ export const action = async ({ request, params }) => {
     return {
       ok: true,
       installedFilename: section.themeFilename,
-      themeEditorUrl: buildThemeEditorUrl(session.shop, themeLegacyId),
+      themeEditorUrl: buildThemeEditorUrl(session.shop, themeId),
     };
   }
 
@@ -216,7 +223,10 @@ export default function SectionDetail() {
               <installFetcher.Form method="post">
                 <input type="hidden" name="intent" value="install" />
                 <Select label="Theme" name="themeId" options={themeOptions} value={selectedThemeId} />
-                <input type="hidden" name="themeLegacyId" value={selectedTheme?.legacyResourceId || ""} />
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Selected theme: {selectedTheme?.name || ""}
+                </Text>
+                {/* legacy theme id is derived from the theme GID */}
                 <div style={{ marginTop: 12 }}>
                   <Button loading={isInstalling} submit>
                     Install to selected theme
