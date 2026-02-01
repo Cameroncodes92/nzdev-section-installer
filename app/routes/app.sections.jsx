@@ -27,7 +27,7 @@ export default function SectionsIndex() {
                 <Text as="p" variant="bodyMd">
                   ${s.priceUsd.toFixed(2)} (one-time)
                 </Text>
-                <Button as={Link} url={`/app/sections/${s.handle}`} variant="primary">
+                <Button as={Link} to={`/app/sections/${s.handle}`} variant="primary">
                   View
                 </Button>
               </InlineStack>
