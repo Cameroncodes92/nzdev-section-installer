@@ -80,6 +80,7 @@ export const action = async ({ request, params }) => {
     }
 
     const isTest = forcedTest || partnerDevelopment;
+    console.log("[billing] isTest=%s forcedTest=%s partnerDevelopment=%s shop=%s", isTest, forcedTest, partnerDevelopment, session.shop);
 
     return billing.request({
       plan: section.billingPlan,
@@ -89,20 +90,30 @@ export const action = async ({ request, params }) => {
 
   if (intent === "purchase") {
     // Require one-time purchase. If missing, redirect to Shopify confirmation.
-    await billing.require({
-      plans: [section.billingPlan],
-      onFailure: billingRequest,
-    });
+    try {
+      await billing.require({
+        plans: [section.billingPlan],
+        onFailure: billingRequest,
+      });
+    } catch (err) {
+      console.error("[billing] Purchase error:", err.message, err.errorData ?? err);
+      return { ok: false, errors: [{ message: err.message }] };
+    }
 
     return { ok: true };
   }
 
   if (intent === "install") {
     // Ensure purchased
-    await billing.require({
-      plans: [section.billingPlan],
-      onFailure: billingRequest,
-    });
+    try {
+      await billing.require({
+        plans: [section.billingPlan],
+        onFailure: billingRequest,
+      });
+    } catch (err) {
+      console.error("[billing] Install billing error:", err.message, err.errorData ?? err);
+      return { ok: false, errors: [{ message: err.message }] };
+    }
 
     const themeId = String(form.get("themeId") || "");
     if (!themeId) throw new Response("Missing theme", { status: 400 });
@@ -178,6 +189,12 @@ export default function SectionDetail() {
   return (
     <Page title={section.title} backAction={{ content: "Sections", url: "/app/sections" }}>
       <BlockStack gap="400">
+        {purchaseFetcher.data?.ok === false && (
+          <Banner tone="critical" title="Purchase failed">
+            <p>{(purchaseFetcher.data.errors || []).map((e) => e.message).join(" · ")}</p>
+          </Banner>
+        )}
+
         {installFetcher.data?.ok === false && (
           <Banner tone="critical" title="Install failed">
             <p>{(installFetcher.data.errors || []).map((e) => e.message).join(" · ")}</p>
