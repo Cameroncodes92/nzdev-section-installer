@@ -17,6 +17,32 @@ function buildThemeEditorUrl(shopDomain, themeGid) {
   return `https://admin.shopify.com/store/${store}/themes/${legacyId}/editor`;
 }
 
+function buildBillingReturnUrl(request) {
+  // Shopify billing returnUrl has a max length (255 chars). Embedded Admin URLs often include
+  // long params like id_token, hmac, session, etc.
+  // We preserve only what App Bridge needs: `host` (and optionally `shop`/`embedded`).
+  const url = new URL(request.url);
+
+  const keep = new Set(["host", "shop", "embedded"]);
+  for (const key of Array.from(url.searchParams.keys())) {
+    if (!keep.has(key)) url.searchParams.delete(key);
+  }
+
+  // Hard fail-safe: if still too long, drop everything except host.
+  if (url.toString().length > 255) {
+    const host = url.searchParams.get("host");
+    url.search = "";
+    if (host) url.searchParams.set("host", host);
+  }
+
+  // Final safeguard: if somehow still too long, drop query completely.
+  if (url.toString().length > 255) {
+    url.search = "";
+  }
+
+  return url.toString();
+}
+
 export const loader = async ({ request, params }) => {
   const { admin, billing, session } = await authenticate.admin(request);
 
@@ -83,8 +109,8 @@ export const action = async ({ request, params }) => {
     const isTest = forcedTest || partnerDevelopment;
     console.log("[billing] isTest=%s forcedTest=%s partnerDevelopment=%s shop=%s", isTest, forcedTest, partnerDevelopment, session.shop);
 
-    // IMPORTANT: preserve query params (esp. `host`) for embedded app context.
-    const returnUrl = request.url;
+    const returnUrl = buildBillingReturnUrl(request);
+    console.log("[billing] returnUrl(%s): %s", returnUrl.length, returnUrl);
 
     return billing.request({
       plan: section.billingPlan,
