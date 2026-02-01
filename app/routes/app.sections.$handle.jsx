@@ -3,8 +3,13 @@ import { Page, Card, BlockStack, Text, Button, InlineStack, Select, Banner } fro
 import { authenticate } from "../shopify.server";
 import { getSectionByHandle, readSectionLiquid } from "../sections/catalog.server";
 
+function buildThemeEditorUrl(shopDomain, themeLegacyId) {
+  const store = shopDomain.replace(/\.myshopify\.com$/i, "");
+  return `https://admin.shopify.com/store/${store}/themes/${themeLegacyId}/editor`;
+}
+
 export const loader = async ({ request, params }) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, billing, session } = await authenticate.admin(request);
 
   const section = getSectionByHandle(params.handle);
   if (!section) throw new Response("Not found", { status: 404 });
@@ -14,18 +19,25 @@ export const loader = async ({ request, params }) => {
     #graphql
     query Themes {
       themes(first: 50) {
-        nodes { id name role }
+        nodes { id legacyResourceId name role }
       }
     }
   `);
   const themeJson = await themeRes.json();
   const themes = themeJson.data.themes.nodes;
 
-  return { section, themes };
+  const billingState = await billing.check({ plans: [section.billingPlan] });
+
+  return {
+    section,
+    themes,
+    billingState,
+    shop: session.shop,
+  };
 };
 
 export const action = async ({ request, params }) => {
-  const { admin, billing } = await authenticate.admin(request);
+  const { admin, billing, session } = await authenticate.admin(request);
 
   const section = getSectionByHandle(params.handle);
   if (!section) throw new Response("Not found", { status: 404 });
@@ -33,15 +45,45 @@ export const action = async ({ request, params }) => {
   const form = await request.formData();
   const intent = String(form.get("intent") || "");
 
+  const billingRequest = async () => {
+    // Production default: real charges.
+    // Dev/partner-development stores cannot be charged, so we automatically use test billing there.
+    // You can force test billing anywhere by setting SHOPIFY_BILLING_TEST=true.
+
+    const forcedTest = String(process.env.SHOPIFY_BILLING_TEST || "").toLowerCase() === "true";
+
+    let partnerDevelopment = false;
+    try {
+      const shopRes = await admin.graphql(`
+        #graphql
+        query ShopPlan {
+          shop {
+            plan {
+              partnerDevelopment
+            }
+          }
+        }
+      `);
+      const shopJson = await shopRes.json();
+      partnerDevelopment = Boolean(shopJson.data?.shop?.plan?.partnerDevelopment);
+    } catch {
+      // If this fails for any reason, fall back to real charges.
+      partnerDevelopment = false;
+    }
+
+    const isTest = forcedTest || partnerDevelopment;
+
+    return billing.request({
+      plan: section.billingPlan,
+      isTest,
+    });
+  };
+
   if (intent === "purchase") {
     // Require one-time purchase. If missing, redirect to Shopify confirmation.
     await billing.require({
       plans: [section.billingPlan],
-      onFailure: async () =>
-        billing.request({
-          plan: section.billingPlan,
-          isTest: true,
-        }),
+      onFailure: billingRequest,
     });
 
     return { ok: true };
@@ -51,15 +93,12 @@ export const action = async ({ request, params }) => {
     // Ensure purchased
     await billing.require({
       plans: [section.billingPlan],
-      onFailure: async () =>
-        billing.request({
-          plan: section.billingPlan,
-          isTest: true,
-        }),
+      onFailure: billingRequest,
     });
 
     const themeId = String(form.get("themeId") || "");
-    if (!themeId) throw new Response("Missing theme", { status: 400 });
+    const themeLegacyId = String(form.get("themeLegacyId") || "");
+    if (!themeId || !themeLegacyId) throw new Response("Missing theme", { status: 400 });
 
     const liquid = readSectionLiquid(section.handle);
 
@@ -92,30 +131,64 @@ export const action = async ({ request, params }) => {
       return { ok: false, errors: errs };
     }
 
-    return { ok: true };
+    return {
+      ok: true,
+      installedFilename: section.themeFilename,
+      themeEditorUrl: buildThemeEditorUrl(session.shop, themeLegacyId),
+    };
   }
 
   throw new Response("Bad request", { status: 400 });
 };
 
 export default function SectionDetail() {
-  const { section, themes } = useLoaderData();
-  const fetcher = useFetcher();
+  const { section, themes, billingState, shop } = useLoaderData();
 
-  const isWorking = ["loading", "submitting"].includes(fetcher.state);
+  const purchaseFetcher = useFetcher();
+  const installFetcher = useFetcher();
+
+  const isPurchasing = ["loading", "submitting"].includes(purchaseFetcher.state);
+  const isInstalling = ["loading", "submitting"].includes(installFetcher.state);
 
   const themeOptions = themes
-    .map((t) => ({ label: `${t.name}${t.role === "MAIN" ? " (Live)" : ""}`, value: t.id }))
-    .sort((a, b) => (a.label.includes("(Live)") ? -1 : 1));
+    .slice()
+    .sort((a, b) => {
+      if (a.role === "MAIN" && b.role !== "MAIN") return -1;
+      if (b.role === "MAIN" && a.role !== "MAIN") return 1;
+      return a.name.localeCompare(b.name);
+    })
+    .map((t) => ({
+      label: `${t.name}${t.role === "MAIN" ? " (Live)" : ""}`,
+      value: t.id,
+    }));
 
-  const selectedTheme = String(fetcher.formData?.get("themeId") || themeOptions[0]?.value || "");
+  const themeIdFromForm = String(installFetcher.formData?.get("themeId") || "");
+  const selectedThemeId = themeIdFromForm || themeOptions[0]?.value || "";
+  const selectedTheme = themes.find((t) => t.id === selectedThemeId) || null;
+
+  const hasPurchased = Boolean(billingState?.hasActivePayment);
 
   return (
     <Page title={section.title} backAction={{ content: "Sections", url: "/app/sections" }}>
       <BlockStack gap="400">
-        {fetcher.data?.ok === false && (
+        {installFetcher.data?.ok === false && (
           <Banner tone="critical" title="Install failed">
-            <p>{(fetcher.data.errors || []).map((e) => e.message).join(" · ")}</p>
+            <p>{(installFetcher.data.errors || []).map((e) => e.message).join(" · ")}</p>
+          </Banner>
+        )}
+
+        {installFetcher.data?.ok === true && (
+          <Banner tone="success" title="Installed">
+            <p>
+              Added <code>{installFetcher.data.installedFilename}</code> to your theme.
+            </p>
+            {installFetcher.data.themeEditorUrl && (
+              <p>
+                <a href={installFetcher.data.themeEditorUrl} target="_blank" rel="noreferrer">
+                  Open Theme Editor
+                </a>
+              </p>
+            )}
           </Banner>
         )}
 
@@ -128,23 +201,28 @@ export default function SectionDetail() {
               Price: ${section.priceUsd.toFixed(2)} (one-time)
             </Text>
 
-            <InlineStack gap="200">
-              <fetcher.Form method="post">
-                <input type="hidden" name="intent" value="purchase" />
-                <Button loading={isWorking} submit variant="primary">
-                  Purchase
-                </Button>
-              </fetcher.Form>
+            <Text as="p" variant="bodySm" tone={hasPurchased ? "success" : "subdued"}>
+              {hasPurchased ? "Purchased" : "Not purchased yet"} ({shop})
+            </Text>
 
-              <fetcher.Form method="post">
+            <InlineStack gap="400" align="start">
+              <purchaseFetcher.Form method="post">
+                <input type="hidden" name="intent" value="purchase" />
+                <Button disabled={hasPurchased} loading={isPurchasing} submit variant="primary">
+                  {hasPurchased ? "Purchased" : "Purchase"}
+                </Button>
+              </purchaseFetcher.Form>
+
+              <installFetcher.Form method="post">
                 <input type="hidden" name="intent" value="install" />
-                <Select label="Theme" name="themeId" options={themeOptions} value={selectedTheme} />
+                <Select label="Theme" name="themeId" options={themeOptions} value={selectedThemeId} />
+                <input type="hidden" name="themeLegacyId" value={selectedTheme?.legacyResourceId || ""} />
                 <div style={{ marginTop: 12 }}>
-                  <Button loading={isWorking} submit>
+                  <Button loading={isInstalling} submit>
                     Install to selected theme
                   </Button>
                 </div>
-              </fetcher.Form>
+              </installFetcher.Form>
             </InlineStack>
 
             <Text as="p" variant="bodySm" tone="subdued">
