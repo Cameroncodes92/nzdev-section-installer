@@ -1,5 +1,4 @@
-import { useEffect } from "react";
-import { useLoaderData, useNavigate } from "@remix-run/react";
+import { useLoaderData, useLocation, useNavigate } from "@remix-run/react";
 import { Page, Card, BlockStack, Text, Button, InlineStack } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import { SECTION_CATALOG } from "../sections/catalog.server";
@@ -12,26 +11,11 @@ export const loader = async ({ request }) => {
 export default function SectionsIndex() {
   const { sections } = useLoaderData();
   const navigate = useNavigate();
+  const location = useLocation();
 
-  useEffect(() => {
-    // Debug click capture to detect overlays / swallowed events.
-    // Enable by setting window.__P5_DEBUG_CLICKS__ = true in the browser console.
-    const handler = (e) => {
-      if (!window.__P5_DEBUG_CLICKS__) return;
-      const t = e.target;
-      // eslint-disable-next-line no-console
-      console.log("[p5-debug] click", {
-        tag: t?.tagName,
-        className: t?.className,
-        id: t?.id,
-        href: t?.getAttribute?.("href"),
-        button: t?.getAttribute?.("type"),
-      });
-    };
-
-    document.addEventListener("click", handler, true);
-    return () => document.removeEventListener("click", handler, true);
-  }, []);
+  // In embedded Shopify Admin, query params like `host` are required for App Bridge context.
+  // Preserve them for client-side navigation.
+  const search = location.search || "";
 
   return (
     <Page title="Sections">
@@ -49,14 +33,7 @@ export default function SectionsIndex() {
                 <Text as="p" variant="bodyMd">
                   ${s.priceUsd.toFixed(2)} (one-time)
                 </Text>
-                <Button
-                  onClick={() => {
-                    // eslint-disable-next-line no-console
-                    console.log("[p5-debug] View click", s.handle);
-                    navigate(`/app/sections/${s.handle}`);
-                  }}
-                  variant="primary"
-                >
+                <Button onClick={() => navigate(`/app/sections/${s.handle}${search}`)} variant="primary">
                   View
                 </Button>
               </InlineStack>
