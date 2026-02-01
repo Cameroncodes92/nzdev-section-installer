@@ -1,4 +1,4 @@
-import { useLoaderData } from "@remix-run/react";
+import { useLoaderData, useNavigate } from "@remix-run/react";
 import { Page, Card, BlockStack, Text, Button, InlineStack } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import { SECTION_CATALOG } from "../sections/catalog.server";
@@ -10,6 +10,7 @@ export const loader = async ({ request }) => {
 
 export default function SectionsIndex() {
   const { sections } = useLoaderData();
+  const navigate = useNavigate();
 
   return (
     <Page title="Sections">
@@ -27,7 +28,7 @@ export default function SectionsIndex() {
                 <Text as="p" variant="bodyMd">
                   ${s.priceUsd.toFixed(2)} (one-time)
                 </Text>
-                <Button url={`/app/sections/${s.handle}`} variant="primary">
+                <Button onClick={() => navigate(`/app/sections/${s.handle}`)} variant="primary">
                   View
                 </Button>
               </InlineStack>
